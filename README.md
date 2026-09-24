@@ -8,7 +8,7 @@ Reusable GitHub Actions workflows shared across my repositories. Each project ke
 |---|---|---|
 | `version-bump.yml` | Classifies the push since the last bump commit (skip, patch, minor, major), stamps the README marker plus version files, commits to `main`, optionally cuts a GitHub Release | `generated`, `nonsource`, `stamp`, `github_release`, `level` |
 | `node-ci.yml` | Install, then run lint, typecheck, test, build (pnpm or npm) | `dir`, `pm`, `node-version`, `pnpm-version`, `scripts` |
-| `python-ci.yml` | pip install, ruff (E9, F), optional Redis, test command | `python-version`, `working-directory`, `redis`, `test-cmd` |
+| `python-ci.yml` | pip install, ruff (syntax and undefined names), optional Redis, test command | `python-version`, `working-directory`, `redis`, `test-cmd` |
 | `java-ci.yml` | Maven verify per module (matrix), optional Docker build | `java-version`, `modules`, `build-docker` |
 | `secret-scan.yml` | Local-path and secret-shaped string scan plus gitleaks | none |
 | `frontend-dist.yml` | Build a frontend and commit `dist/` to `main` | `dir`, `node-version`, `pnpm-version` |
