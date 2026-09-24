@@ -1,0 +1,79 @@
+name: Python CI
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        default: '3.12'
+      requirements:
+        type: string
+        default: ''
+      test-cmd:
+        type: string
+        default: ''
+      redis:
+        type: boolean
+        default: false
+      working-directory:
+        type: string
+        default: '.'
+      compileall:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Start Redis
+        if: inputs.redis
+        run: |
+          docker run -d --name redis -p 6379:6379 redis:7
+          for attempt in {1..30}; do
+            echo "Waiting for Redis (attempt $attempt)..."
+            if nc -z localhost 6379 2>/dev/null || timeout 1 bash -c '</dev/tcp/localhost/6379' 2>/dev/null; then
+              echo "Redis is ready"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          if [ -n "${{ inputs.requirements }}" ]; then
+            pip install -r ${{ inputs.requirements }}
+          else
+            if [ -f "requirements.txt" ]; then pip install -r requirements.txt; fi
+            if [ -f "requirements-dev.txt" ]; then pip install -r requirements-dev.txt; fi
+          fi
+
+      - name: Compile check
+        if: inputs.compileall
+        run: python -m compileall .
+
+      - name: Lint with Ruff (E9, F)
+        run: ruff check --select E9,F .
+
+      - name: Run tests
+        if: inputs.test-cmd != ''
+        run: ${{ inputs.test-cmd }}

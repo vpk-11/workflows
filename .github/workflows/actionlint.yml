@@ -1,0 +1,27 @@
+name: Actionlint
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: reviewdog/action-actionlint@144cce1f5f4aad4f36bfba866f46565ac2c93546 # v1.9.0
+        with:
+          reporter: local
+          fail_level: error

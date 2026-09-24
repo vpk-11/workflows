@@ -1,0 +1,99 @@
+name: Node CI
+on:
+  workflow_call:
+    inputs:
+      dir:
+        type: string
+        default: '.'
+      node-version:
+        type: string
+        default: '22'
+      pm:
+        type: string
+        default: 'pnpm' # 'pnpm' or 'npm'
+      pnpm-version:
+        type: string
+        default: ''
+      lint:
+        type: string
+        default: ''
+      typecheck:
+        type: string
+        default: ''
+      test:
+        type: string
+        default: ''
+      build:
+        type: string
+        default: ''
+      scripts:
+        type: string
+        default: ''
+      command:
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.dir }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        if: inputs.pm == 'pnpm'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ inputs.pnpm-version }}
+          package_json_file: ${{ inputs.dir }}/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.pm == 'pnpm' && 'pnpm' || 'npm' }}
+          cache-dependency-path: ${{ inputs.dir != '.' && format('{0}/{1}', inputs.dir, inputs.pm == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json') || (inputs.pm == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json') }}
+
+      - name: Install dependencies
+        run: |
+          if [ "${{ inputs.pm }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Lint
+        if: inputs.lint != ''
+        run: ${{ inputs.pm }} run ${{ inputs.lint }}
+
+      - name: Typecheck
+        if: inputs.typecheck != ''
+        run: ${{ inputs.pm }} run ${{ inputs.typecheck }}
+
+      - name: Test
+        if: inputs.test != ''
+        run: ${{ inputs.pm }} run ${{ inputs.test }}
+
+      - name: Build
+        if: inputs.build != ''
+        run: ${{ inputs.pm }} run ${{ inputs.build }}
+
+      - name: Run scripts
+        if: inputs.scripts != ''
+        run: |
+          for s in ${{ inputs.scripts }}; do
+            ${{ inputs.pm }} run "$s"
+          done
+
+      - name: Run command
+        if: inputs.command != ''
+        run: ${{ inputs.command }}

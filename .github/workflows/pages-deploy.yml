@@ -1,0 +1,90 @@
+name: Pages Deploy
+on:
+  workflow_call:
+    inputs:
+      path:
+        type: string
+        default: './dist'
+      build:
+        type: boolean
+        default: true
+      node-version:
+        type: string
+        default: '22'
+      pm:
+        type: string
+        default: 'pnpm'
+      pnpm-version:
+        type: string
+        default: ''
+      build-script:
+        type: string
+        default: 'build'
+      artifact-name:
+        type: string
+        default: ''
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        if: inputs.artifact-name == ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        if: inputs.artifact-name == '' && inputs.pm == 'pnpm'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node
+        if: inputs.artifact-name == ''
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.pm == 'pnpm' && 'pnpm' || 'npm' }}
+
+      - name: Install dependencies
+        if: inputs.artifact-name == '' && inputs.build
+        run: |
+          if [ "${{ inputs.pm }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          else
+            npm ci
+          fi
+
+      - name: Build
+        if: inputs.artifact-name == '' && inputs.build
+        run: ${{ inputs.pm }} run ${{ inputs.build-script }}
+
+      - name: Download artifact
+        if: inputs.artifact-name != ''
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.path }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ inputs.path }}
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

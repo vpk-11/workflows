@@ -1,0 +1,3 @@
+# Require review on all workflows and shared core changes
+.github/workflows/ @vpk-11
+scripts/ @vpk-11

@@ -1,0 +1,168 @@
+name: Version Bump
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Bump level (auto = classify from the changed files)"
+        type: choice
+        default: auto
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  version-bump:
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      # Decide the bump level for this run:
+      #   major  - a PR was merged into main (or dispatched with level=major)
+      #   minor  - a push to main that changed real source (*.py, config/, scripts/,
+      #            requirements.txt, ...)
+      #   patch  - a push to main whose only non-generated changes are tests (tests/),
+      #            docs (*.md), CI (.github/), or LICENSE
+      #   skip   - nothing changed outside graphify-out/ (generated output),
+      #            or the push is the merge commit of a PR (the pull_request event
+      #            handles that one as a major)
+      - name: Classify
+        id: cls
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "level=major" >> "$GITHUB_OUTPUT"
+            echo "PR merge -> major"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.level }}" != "auto" ]; then
+            echo "level=${{ inputs.level }}" >> "$GITHUB_OUTPUT"
+            echo "manual dispatch -> ${{ inputs.level }}"
+            exit 0
+          fi
+
+          # --- work out the file set this event introduced ------------------------------
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE='${{ github.event.before }}'
+            AFTER='${{ github.sha }}'
+
+            # A PR merge fires push + pull_request together; let the PR event own it.
+            PARENTS=$(git log -1 --format='%P' "$AFTER" | wc -w)
+            MSG=$(git log -1 --format='%s' "$AFTER")
+            if [ "$PARENTS" -gt 1 ] || printf '%s' "$MSG" | grep -qE '\(#[0-9]+\)$'; then
+              echo "level=skip" >> "$GITHUB_OUTPUT"
+              echo "merge commit on push -> skip (pull_request event handles it)"
+              exit 0
+            fi
+
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              # new branch / forced update / unknown base: fall back to the tip commit
+              CHANGED=$(git diff --name-only "${AFTER}~1" "$AFTER")
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "$AFTER")
+            fi
+          else
+            # workflow_dispatch with level=auto: compare the tip commit
+            CHANGED=$(git diff --name-only 'HEAD~1' 'HEAD')
+          fi
+
+          echo "changed files in range:"
+          printf '%s\n' "$CHANGED"
+
+          # --- classify -----------------------------------------------------------------
+          # Drop generated output first.
+          REAL=$(printf '%s\n' "$CHANGED" | grep -Ev '^graphify-out/' | grep -v '^$' || true)
+          if [ -z "$REAL" ]; then
+            echo "level=skip" >> "$GITHUB_OUTPUT"
+            echo "only generated files changed -> skip"
+            exit 0
+          fi
+
+          # Of what's left, is any of it real source? (i.e. NOT test/asset/doc/CI/LICENSE)
+          CODE=$(printf '%s\n' "$REAL" | grep -Ev '(\.md$|^tests/|^\.github/|^LICENSE$)' || true)
+          if [ -z "$CODE" ]; then
+            echo "level=patch" >> "$GITHUB_OUTPUT"
+            echo "non-generated changes are tests/docs/CI only -> patch"
+          else
+            echo "level=minor" >> "$GITHUB_OUTPUT"
+            echo "real source changed -> minor"
+            printf 'source files:\n%s\n' "$CODE"
+          fi
+
+      - name: Compute new version
+        id: new
+        if: steps.cls.outputs.level != 'skip'
+        run: |
+          set -euo pipefail
+          LEVEL='${{ steps.cls.outputs.level }}'
+
+          CUR=$(grep -oP '(?<=<!-- version: v)[\d.]+(?= -->)' README.md || echo "0.0.0")
+          MAJOR=$(echo "$CUR" | cut -d. -f1)
+          MINOR=$(echo "$CUR" | cut -d. -f2)
+          PATCH=$(echo "$CUR" | cut -d. -f3); PATCH=${PATCH:-0}
+
+          case "$LEVEL" in
+            major) NEW="$((MAJOR + 1)).0.0" ;;
+            minor) NEW="${MAJOR}.$((MINOR + 1)).0" ;;
+            patch) NEW="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            *) echo "unknown level '$LEVEL'"; exit 1 ;;
+          esac
+
+          echo "current=$CUR"   >> "$GITHUB_OUTPUT"
+          echo "version=$NEW"   >> "$GITHUB_OUTPUT"
+          echo "bump_type=$LEVEL" >> "$GITHUB_OUTPUT"
+          echo "$CUR -> $NEW ($LEVEL)"
+
+      - name: Update version in README
+        if: steps.cls.outputs.level != 'skip'
+        run: |
+          set -euo pipefail
+          NEW_VERSION='${{ steps.new.outputs.version }}'
+          BUMP_TYPE='${{ steps.new.outputs.bump_type }}'
+          DATE=$(date +'%Y-%m-%d')
+
+          sed -i "s/<!-- version: v[0-9.]* -->/<!-- version: v${NEW_VERSION} -->/" README.md
+          sed -i "s/!\[Version\](https:\/\/img\.shields\.io\/badge\/version-v[0-9.]*-/![Version](https:\/\/img.shields.io\/badge\/version-v${NEW_VERSION}-/" README.md
+
+          if grep -q "## Changelog" README.md; then
+            sed -i "/## Changelog/a - **v${NEW_VERSION}** (${DATE}) — ${BUMP_TYPE} bump" README.md
+          fi
+
+      - name: Commit and push
+        if: steps.cls.outputs.level != 'skip'
+        run: |
+          set -euo pipefail
+          NEW_VERSION='${{ steps.new.outputs.version }}'
+          git add README.md
+          git diff --staged --quiet || git commit -m "chore: bump version to v${NEW_VERSION} [skip ci]"
+          git push

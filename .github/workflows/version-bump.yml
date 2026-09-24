@@ -1,0 +1,145 @@
+name: Version Bump
+on:
+  workflow_call:
+    inputs:
+      level:
+        type: string
+        default: auto
+      generated:
+        type: string
+        required: true # ERE of generated paths
+      nonsource:
+        type: string
+        required: true # ERE of paths that imply patch
+      stamp:
+        type: string
+        default: "" # e.g. "package.json" or "pyproject.toml"
+      github_release:
+        type: boolean
+        default: false
+    outputs:
+      level:
+        value: "${{ jobs.bump.outputs.level }}"
+      version:
+        value: "${{ jobs.bump.outputs.version }}"
+
+permissions: {}
+
+jobs:
+  bump:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+    concurrency:
+      group: main-writeback
+      cancel-in-progress: false
+    outputs:
+      level: ${{ steps.run.outputs.level }}
+      version: ${{ steps.run.outputs.version }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+          fetch-depth: 0
+      - id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          LEVEL_IN: ${{ inputs.level }}
+          GENERATED: ${{ inputs.generated }}
+          NONSOURCE: ${{ inputs.nonsource }}
+          STAMP: ${{ inputs.stamp }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          LAST=$(git log -1 --format=%H --grep='^chore: bump version to v')
+          [ -n "$LAST" ] || LAST=$(git rev-list --max-parents=0 HEAD | tail -1)
+          CHANGED=$(git diff --name-only "$LAST" HEAD)
+          REAL=$(printf '%s\n' "$CHANGED" | grep -Ev "$GENERATED" | grep -v '^$' || true)
+
+          if [ "$LEVEL_IN" != "auto" ]; then
+            LEVEL="$LEVEL_IN"
+          elif [ -z "$REAL" ]; then
+            LEVEL="skip"
+          else
+            PR_COUNT=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[]|select(.merged_at)]|length' 2>/dev/null || true)
+            if [ -z "$PR_COUNT" ]; then
+              sleep 5
+              PR_COUNT=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[]|select(.merged_at)]|length')
+            fi
+            if [ "$PR_COUNT" -gt 0 ]; then
+              LEVEL="major"
+            elif [ -z "$(printf '%s\n' "$REAL" | grep -Ev "$NONSOURCE" || true)" ]; then
+              LEVEL="patch"
+            else
+              LEVEL="minor"
+            fi
+          fi
+
+          echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
+          printf 'range %s..HEAD, level %s\n%s\n' "$LAST" "$LEVEL" "$CHANGED"
+          if [ "$LEVEL" = skip ]; then
+            echo "### Version Bump: skipped" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          CUR=$(grep -oP '(?<=<!-- version: v)\d+\.\d+\.\d+(?= -->)' README.md)
+          if [ -z "$CUR" ]; then
+            echo "Error: Missing version marker '<!-- version: vX.Y.Z -->' in README.md" >&2
+            exit 1
+          fi
+
+          IFS=. read -r MA MI PA <<< "$CUR"
+          case $LEVEL in
+            major) NEW="$((MA+1)).0.0" ;;
+            minor) NEW="$MA.$((MI+1)).0" ;;
+            patch) NEW="$MA.$MI.$((PA+1))" ;;
+          esac
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "### Version Bump: $LEVEL (v$NEW)" >> "$GITHUB_STEP_SUMMARY"
+
+          sed -i "s/<!-- version: v[0-9.]* -->/<!-- version: v$NEW -->/; s#badge/version-v[0-9.]*-#badge/version-v$NEW-#" README.md
+          sed -i "/^## Changelog\$/a - **v$NEW** ($(date +%F)): $LEVEL bump" README.md
+          grep -q "<!-- version: v$NEW -->" README.md
+
+          for f in $STAMP; do
+            case "$f" in
+              *.json) jq --arg v "$NEW" '.version=$v' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+              *.toml) sed -i -E "s/^version = \"[^\"]*\"/version = \"$NEW\"/" "$f" ;;
+            esac
+          done
+
+          git add README.md
+          if [ -n "$STAMP" ]; then
+            # shellcheck disable=SC2086
+            git add $STAMP
+          fi
+          git commit -m "chore: bump version to v$NEW [skip ci] [skip render]"
+          for attempt in 1 2 3; do
+            echo "Push attempt $attempt"
+            git push origin HEAD:main && exit 0
+            git pull --rebase origin main
+          done
+          exit 1
+
+  release:
+    needs: bump
+    if: inputs.github_release && needs.bump.outputs.level != 'skip'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: main
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.bump.outputs.version }}
+        run: gh release create "v$VERSION" --title "v$VERSION" --generate-notes

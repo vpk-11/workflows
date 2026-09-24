@@ -1,0 +1,17 @@
+name: Check for leaks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  check-leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan tracked files for local paths and secret-shaped strings
+        run: node scripts/dev/check-leaks.mjs --full

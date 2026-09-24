@@ -1,0 +1,76 @@
+name: Java CI
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        type: string
+        default: '26'
+      distribution:
+        type: string
+        default: 'temurin'
+      modules:
+        type: string
+        default: '["."]' # JSON array of module directories
+      build-docker:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(inputs.modules) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: ${{ inputs.distribution }}
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      - name: Run Maven verify
+        run: |
+          cd "${{ matrix.module }}"
+          MVN_CMD="mvn"
+          if [ -f "./mvnw" ]; then
+            MVN_CMD="./mvnw"
+          elif [ -f "../mvnw" ]; then
+            MVN_CMD="../mvnw"
+          fi
+          $MVN_CMD -B verify
+
+      - name: Upload Surefire Reports
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: surefire-reports-${{ matrix.module }}
+          path: '**/target/surefire-reports/**'
+
+  docker:
+    needs: build
+    if: inputs.build-docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Build Docker images (dry-run without push)
+        run: |
+          find . -name Dockerfile | while read -r df; do
+            echo "Building $df"
+            docker build -f "$df" "$(dirname "$df")"
+          done
