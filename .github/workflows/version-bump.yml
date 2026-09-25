@@ -68,13 +68,13 @@ jobs:
           elif [ -z "$REAL" ]; then
             LEVEL="skip"
           else
-            PR_COUNT=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[]|select(.merged_at)]|length' 2>/dev/null || true)
-            if [ -z "$PR_COUNT" ]; then
-              sleep 5
-              PR_COUNT=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq '[.[]|select(.merged_at)]|length')
-            fi
-            if [ "$PR_COUNT" -gt 0 ]; then
+            PRJ=$(gh api "repos/$REPO/commits/$SHA/pulls" 2>/dev/null) || { sleep 5; PRJ=$(gh api "repos/$REPO/commits/$SHA/pulls"); }
+            ALL_PRS=$(jq '[.[]|select(.merged_at)]|length' <<< "$PRJ")
+            BOT_PRS=$(jq '[.[]|select(.merged_at and .user.login=="dependabot[bot]")]|length' <<< "$PRJ")
+            if [ "$ALL_PRS" -gt "$BOT_PRS" ]; then
               LEVEL="major"
+            elif [ "$BOT_PRS" -gt 0 ]; then
+              LEVEL="patch"
             elif [ -z "$(printf '%s\n' "$REAL" | grep -Ev "$NONSOURCE" || true)" ]; then
               LEVEL="patch"
             else
