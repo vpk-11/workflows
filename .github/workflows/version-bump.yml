@@ -70,7 +70,7 @@ jobs:
           else
             PRJ=$(gh api "repos/$REPO/commits/$SHA/pulls" 2>/dev/null) || { sleep 5; PRJ=$(gh api "repos/$REPO/commits/$SHA/pulls"); }
             ALL_PRS=$(jq '[.[]|select(.merged_at)]|length' <<< "$PRJ")
-            BOT_PRS=$(jq '[.[]|select(.merged_at and .user.login=="dependabot[bot]")]|length' <<< "$PRJ")
+            BOT_PRS=$(jq '[.[]|select(.merged_at and (.user.login=="dependabot[bot]" or (.head.ref|startswith("fix/"))))]|length' <<< "$PRJ")
             if [ "$ALL_PRS" -gt "$BOT_PRS" ]; then
               LEVEL="major"
             elif [ "$BOT_PRS" -gt 0 ]; then
