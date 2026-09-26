@@ -110,7 +110,9 @@ jobs:
 
           for f in $STAMP; do
             case "$f" in
-              *.json) jq --arg v "$NEW" '.version=$v' "$f" > "$f.tmp" && mv "$f.tmp" "$f" ;;
+              *.json)
+                sed -i -E '0,/^([[:space:]]{1,4})"version":[[:space:]]*"[^"]*"/s//\1"version": "'"$NEW"'"/' "$f"
+                jq -e --arg v "$NEW" '.version == $v' "$f" > /dev/null ;;
               *.toml) sed -i -E "s/^version = \"[^\"]*\"/version = \"$NEW\"/" "$f" ;;
             esac
           done
